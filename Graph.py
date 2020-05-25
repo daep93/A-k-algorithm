@@ -59,60 +59,6 @@ class Gridgraph:
         for _node in self.G.nodes:
             self.G.nodes[_node]['touched'] = False
 
-    def max_weight_matching(self, with_queue):
-        weight = 'capacity'
-
-        if with_queue:
-            for i, j in self.G.edges:
-                self.G[i][j]['weighted capacity'] = self.G[i][j]['backlog'] * self.G[i][j]['capacity']
-            weight = 'weighted capacity'
-
-        matching = nx.max_weight_matching(self.G, weight=weight)
-
-        sum_reward = 0
-        for i, j in matching:
-            sum_reward += self.G[i][j][weight]
-
-        return matching, sum_reward
-
-    def greedy_maximum_matching(self, with_queue):
-        Edge = recordclass('Edge', 'edge, weight')
-        weight = 'capacity'
-
-        if with_queue:
-
-            for i, j in self.G.edges:
-                self.G[i][j]['weighted capacity'] = self.G[i][j]['backlog'] * self.G[i][j]['capacity']
-            weight = 'weighted capacity'
-
-        edges = [Edge(edge=e, weight=self.G.edges[e][weight]) for e in self.G.edges]
-        sorted_edges = [e.edge for e in sorted(edges, key=lambda l: l.weight, reverse=True)]
-
-        matching = []
-        while len(sorted_edges) != 0:
-
-            next_edge = sorted_edges[0]
-
-            matching.append(next_edge)
-            sorted_edges.remove(next_edge)
-
-            edge_adj_list = self.neighbor_edges('e',next_edge,None)
-
-            for target in edge_adj_list:
-                reversed_target = tuple(reversed(target))
-
-                if target in sorted_edges:
-                    print('delete', target)
-                    sorted_edges.remove(target)
-                if reversed_target in sorted_edges:
-                    print('delete', reversed_target)
-                    sorted_edges.remove(reversed_target)
-        sum_reward = 0
-        for e in matching:
-            sum_reward += self.G.edges[e][weight]
-
-        return matching, sum_reward
-
     def estimator_update(self, estimator, with_queue, time):
         if estimator == 'TS':
             if with_queue:
@@ -142,15 +88,97 @@ class Gridgraph:
                                 self.G.edges[edge]['alpha'] + self.G.edges[edge]['beta'] + 1)
                     )
 
+        else:
+            return
+
+    def max_weight_matching(self, with_queue, estimator, time):
+        weight = 'capacity'
+
+        if with_queue:
+            # For calculation of queue ratio
+            backlogs_snapshot = set([self.G.edges[edge]['backlog'] for edge in self.G.edges])
+            backlog_max = max(backlogs_snapshot)
+
+            weight = 'weighted capacity'
+            if estimator == 'capacity':
+                estimator = weight
+
+            if backlog_max == 0:
+                backlog_max = 1
+
+            for edge in self.G.edges:
+                self.G.edges[edge]['weight'] = self.G.edges[edge]['backlog'] / backlog_max
+                self.G.edges[edge][weight] = self.G.edges[edge]['weight'] * self.G.edges[edge]['capacity']
+
+        self.estimator_update(estimator, with_queue, time)
+        matching = nx.max_weight_matching(self.G, weight=estimator)
+
+        sum_reward = 0
+        for i, j in matching:
+            sum_reward += self.G[i][j][weight]
+
+        return matching, sum_reward
+
+    def greedy_maximum_matching(self, with_queue, estimator, time):
+        Edge = recordclass('Edge', 'edge, weight')
+        weight = 'capacity'
+
+        if with_queue:
+            # For calculation of queue ratio
+            backlogs_snapshot = set([self.G.edges[edge]['backlog'] for edge in self.G.edges])
+            backlog_max = max(backlogs_snapshot)
+
+            weight = 'weighted capacity'
+            if estimator == 'capacity':
+                estimator = weight
+
+            if backlog_max == 0:
+                backlog_max = 1
+
+            for edge in self.G.edges:
+                self.G.edges[edge]['weight'] = self.G.edges[edge]['backlog'] / backlog_max
+                self.G.edges[edge][weight] = self.G.edges[edge]['weight'] * self.G.edges[edge]['capacity']
+
+        edges = [Edge(edge=e, weight=self.G.edges[e][estimator]) for e in self.G.edges]
+        sorted_edges = [e.edge for e in sorted(edges, key=lambda l: l.weight, reverse=True)]
+
+        matching = []
+        while len(sorted_edges) != 0:
+
+            next_edge = sorted_edges[0]
+
+            matching.append(next_edge)
+            sorted_edges.remove(next_edge)
+
+            edge_adj_list = self.neighbor_edges('e',next_edge,None)
+
+            for target in edge_adj_list:
+                reversed_target = tuple(reversed(target))
+
+                if target in sorted_edges:
+                    print('delete', target)
+                    sorted_edges.remove(target)
+                if reversed_target in sorted_edges:
+                    print('delete', reversed_target)
+                    sorted_edges.remove(reversed_target)
+        sum_reward = 0
+        for e in matching:
+            sum_reward += self.G.edges[e][weight]
+
+        return matching, sum_reward
+
     def augmentation(self, k, p_seed, with_queue, estimator, time):
-        # For calculation of queue ratio
-        backlogs_snapshot = set([self.G.edges[edge]['backlog'] for edge in self.G.edges])
-        backlog_max = max(backlogs_snapshot)
         weight = 'capacity'
 
         # Change the weight
         if with_queue:
+            # For calculation of queue ratio
+            backlogs_snapshot = set([self.G.edges[edge]['backlog'] for edge in self.G.edges])
+            backlog_max = max(backlogs_snapshot)
+
             weight = 'weighted capacity'
+            if estimator == 'capacity':
+                estimator = weight
 
             if backlog_max == 0:
                 backlog_max = 1
@@ -264,7 +292,7 @@ class Gridgraph:
         for idx in augmentations.keys():
             aug = augmentations[idx]
             neighbors = set(self.G.adj[aug.active_pnt])
-            if len(aug.edges) >=2 and aug.seed in neighbors and aug.cur_size < aug.max_size:
+            if len(aug.edges) >= 2 and aug.seed in neighbors and aug.cur_size < aug.max_size:
                 first_edge = aug.edges[0]
                 last_edge = aug.edges[-1]
                 if self.G.edges[first_edge]['scheduled'] and self.G.edges[last_edge]['scheduled']:
@@ -302,7 +330,7 @@ class Gridgraph:
     def matching_checker(matching):
         tested = set()
         for node1, node2 in matching:
-            if not node1 in tested and not node2 in tested:
+            if node1 not in tested and node2 not in tested:
                 tested.add(node1)
                 tested.add(node2)
             else:
