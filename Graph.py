@@ -1,14 +1,12 @@
 import networkx as nx
-from tqdm import tqdm_notebook
+# from tqdm import tqdm_notebook
 import numpy as np
 import math
-from collections import namedtuple
 from recordclass import recordclass
 import matplotlib.pyplot as plt
 
 
 class Gridgraph:
-
 
     def __init__(self, _nodes, _capacities):
         _capacities = iter(_capacities)
@@ -23,6 +21,22 @@ class Gridgraph:
             self.G.edges[edge]['beta'] = 0
 
     def neighbor_edges(self, ty, obj, past):
+        """
+        func_name: neighbor_edges
+            This function returns the neighbor edges of 'obj'.
+            the left point of all neighbor edge is obj.
+        :param ty:
+            Neighbor edges of edge  -> input 'e'
+            Neighbor edges of point -> input 'p'.
+        :param obj:
+            information of point or edge
+        :param past:
+            if you want not to consider 'past' point, then function will return the result
+            except edges where end point is 'past'.
+        :return:
+            list of neighbor edges of 'obj'
+        """
+
         if ty == 'e':
             end1, end2 = obj
             neighbor_1 = set([(end1, neighbor) for neighbor in self.G.adj[end1]])
@@ -53,6 +67,11 @@ class Gridgraph:
         plt.show()
 
     def refresh(self):
+        """
+        Only for augmentation algorithm.
+        Initialize 'change' variable and touched trace
+        :return: None
+        """
         for edge in self.G.edges:
             self.G.edges[edge]['change'] = False
 
@@ -60,6 +79,20 @@ class Gridgraph:
             self.G.nodes[_node]['touched'] = False
 
     def estimator_update(self, estimator, with_queue, time):
+        """
+        func_name: estimator_update
+            At each time, this function updates estimators
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param with_queue:
+            want to consider queue -> True
+            otherwise -> False
+        :param time:
+            time slot
+        :return: None
+        """
         if estimator == 'TS':
             if with_queue:
                 for edge in self.G.edges:
@@ -92,6 +125,23 @@ class Gridgraph:
             return
 
     def max_weight_matching(self, with_queue, estimator, time):
+        """
+        func_name: max_weight_matching
+            This function calculate max weight matching of given graph and return the matching
+            and mean reward of the matching.
+
+        :param with_queue:
+            want to consider queue -> True
+            otherwise -> False
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param time:
+            time slot
+        :return:
+            return the max weight matching and mean reward of the matching
+        """
         weight = 'capacity'
 
         if with_queue:
@@ -120,6 +170,23 @@ class Gridgraph:
         return matching, sum_reward
 
     def greedy_maximum_matching(self, with_queue, estimator, time):
+        """
+        func_name: greedy_maximum_matching
+            This function calculate greedy maximum weight matching of given graph
+            and return the matching and mean reward of the matching.
+
+        :param with_queue:
+            want to consider queue -> True
+            otherwise -> False
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param time:
+            time slot
+        :return:
+            return the greedy maximum matching and mean reward of the matching
+        """
         Edge = recordclass('Edge', 'edge, weight')
         weight = 'capacity'
 
@@ -168,6 +235,27 @@ class Gridgraph:
         return matching, sum_reward
 
     def augmentation(self, k, p_seed, with_queue, estimator, time):
+        """
+        func_name: augmentation
+                    This function calculate a matching by augmenting
+                    and return the matching and mean reward of the matching.
+        :param k:
+            intended size (= upper bound of augmentation size)
+        :param p_seed:
+            the probability of seed
+        :param with_queue:
+            want to consider queue -> True
+            otherwise -> False
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param time:
+            time slot
+        :return:
+            return the calculated matching by augmenting and mean reward of the matching
+
+        """
         weight = 'capacity'
 
         # Change the weight
