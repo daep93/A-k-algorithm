@@ -4,7 +4,7 @@ import numpy as np
 import math
 from recordclass import recordclass
 import matplotlib.pyplot as plt
-
+import os
 
 class GridGraph:
     def __init__(self, _nodes, _arrivals, _capacities):
@@ -421,8 +421,6 @@ class GridGraph:
             raise Exception('Please revise UCB algorithm')
 
         return matching
-
-
 class LargeGraph:
     def __init__(self, _nodes, _edges, _arrivals, _capacities):
         _capacities = iter(_capacities)
@@ -439,7 +437,27 @@ class LargeGraph:
             self.graph.edges[edge]['count'] = 1
             self.graph.edges[edge]['alpha'] = 1
             self.graph.edges[edge]['beta'] = 0
-
+            
+    def reinit(self):
+        for edge in self.graph.edges:
+            self.graph.edges[edge]['backlog'] = 0
+            self.graph.edges[edge]['backlog_snapshot'] = 0
+            self.graph.edges[edge]['scheduled'] = False
+        self.refresh_graph() 
+        
+    def reset_environment(self, edges, min_lambda, max_lambda, min_mu, max_mu, frame_size, frame_rep):
+        path1 = './arrival_patterns'
+        arrival_list = os.listdir(path1)
+        
+        with open(
+                './arrival_patterns/' + f'Arrivals(edge {edges}, lambda from {min_lambda:.4f} to {max_lambda:.4f}, frame_size {frame_size}, frame_rep {frame_rep}).txt',
+            'r') as f:
+            arrivals = f.readlines()
+        arrivals = iter(arrivals)
+        
+        for edge in self.graph.edges:
+            self.graph.edges[edge]['arrivals'] = iter(next(arrivals))
+    
     def draw(self, *matchings):
         num = len(matchings)
         cnt = 1
@@ -454,7 +472,7 @@ class LargeGraph:
             nx.draw_networkx_edges(self.graph, self.pos, edgelist=matching, width=8, alpha=0.5, edge_color='b')
         plt.show()
 
-    def get_neighbors(self, obj, past):
+    def get_neighbors(self, obj, past=None):
         """
         func_name: neighbor
             This function returns the neighbor edges of 'obj'.
@@ -486,7 +504,7 @@ class LargeGraph:
             neighbors = [(obj, neighbor) for neighbor in adj]
         else:
             raise Exception('Need proper type to \'obj\' in neighbors function')
-
+        
         return neighbors
 
     def init_estimator(self, estimator):
@@ -528,6 +546,36 @@ class LargeGraph:
         else:
             raise Exception(f'We don\'t deal with {estimator} as estimator')
 
+    def get_estimator(self, edge, local_max_backlog,  estimator, time):
+        """
+        func_name: estimator_update
+            At each time, this function updates estimators
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param time:
+            time slot
+        :return: None
+        """
+        if local_max_backlog:
+            queue_ratio = self.graph.edges[edge]['backlog_snapshot']/local_max_backlog
+        else:
+            queue_ratio = 1
+            
+        if estimator == 'TS':
+            self.graph.edges[edge]['TS'] =  queue_ratio * np.random.beta(
+                self.graph.edges[edge]['alpha'] + 1, self.graph.edges[edge]['beta'] + 1
+            )
+
+        elif estimator == 'UCB':
+            
+            self.graph.edges[edge]['UCB'] = queue_ratio * self.graph.edges[edge][
+                'sample mean'] + math.sqrt((self.graph.number_of_nodes() + 1) * math.log(time) / (self.graph.edges[edge]['count']))
+        else:
+            raise Exception(f'We don\'t deal with {estimator} as estimator')        
+            
+            
     def update_after_schedule(self, matching, estimator):
         if estimator == 'UCB':
             for edge in matching:
@@ -554,10 +602,7 @@ class LargeGraph:
 
     def queue_departure(self):
         for edge in self.graph.edges():
-            self.graph.edges[edge]['backlog'] = max(0, self.graph.edges[edge]['backlog'] - np.random.binomial(1,
-                                                                                                              self.graph.edges[
-                                                                                                                  edge][
-                                                                                                                  'capacity']))
+            self.graph.edges[edge]['backlog'] = max(0, self.graph.edges[edge]['backlog'] - np.random.binomial(1,self.graph.edges[edge]['capacity']))
 
     def queue_snapshot(self):  # Should revise this function to get 'backlog_snapshot' for one frame
         for edge in self.graph.edges:
@@ -732,7 +777,7 @@ class LargeGraph:
                 for idx in receivers[r_pnt]:
                     augmentations[idx].alive = False
             else:
-                idx = (receivers[r_pnt]).pop()  # aug = next(receivers[r_pnt])
+                idx = receivers[r_pnt].pop()  # aug = next(receivers[r_pnt])
                 aug = augmentations[idx]
                 if aug.old_to_new:
                     aug.edges.append((aug.active_pnt, aug.next_pnt))
@@ -760,7 +805,7 @@ class LargeGraph:
                             else:
                                 picked_one = None
                                 break
-
+                                
                     else:
                         picked_one = None
                         for edge in candidates:
@@ -789,7 +834,7 @@ class LargeGraph:
                     for idx in receivers[r_pnt]:
                         augmentations[idx].alive = False
                 else:
-                    idx = (receivers[r_pnt]).pop()
+                    idx = (receivers[r_pnt]).pop()  
                     aug = augmentations[idx]
                     if aug.old_to_new:
                         aug.edges.append((aug.active_pnt, aug.next_pnt))
@@ -841,6 +886,206 @@ class LargeGraph:
 
         return matching
 
+    def dA_k_matching(self, k, p_seed, estimator, time):
+        """
+        func_name: augmentation
+                    This function calculate a matching by real distributed augmenting
+                    and return the matching and mean reward of the matching.
+        :param k:
+            intended size (= upper bound of augmentation size)
+        :param p_seed:
+            the probability of seed
+        :param estimator:
+            Thompson sampling -> 'TS'
+            Upper Confidence Bound -> 'UCB'
+            not want to use estimator -> the other command
+        :param time:
+            time slot
+        :return:
+            return the calculated matching by augmenting and mean reward of the matching
+
+        """
+        # For calculation of local queue ratio
+        for node in self.graph.nodes:
+            self.graph.nodes[node]['local_max_backlog'] = max([self.graph.edges[neighbor]['backlog_snapshot'] for neighbor in self.get_neighbors(node)]) 
+
+        
+
+        # Refresh graph at every time slot
+        self.refresh_graph()
+
+        # Generate seeds for augmenting
+        augmentations = dict()
+        Aug = recordclass('Augmentation', 'seed, active_pnt, next_pnt, alive, cur_size, max_size, edges,local_max_backlog, old_to_new')
+        cnt = 0
+        for v in self.graph.nodes:
+            if np.random.binomial(1, p_seed):
+                aug = Aug(seed=v, active_pnt=v, next_pnt=None, alive=True, cur_size=0,
+                          max_size=int(np.random.choice(range(1, k + 1), 1)), edges=[], local_max_backlog=0, old_to_new=False)
+                augmentations[cnt] = aug
+                self.graph.nodes[v]['touched'] = True
+                cnt += 1
+
+        # First extension step
+        receivers = dict()
+        for idx in augmentations.keys():
+            near_scheduled = False
+            aug = augmentations[idx]
+            for edge in self.get_neighbors(aug.seed, None):
+                if self.graph.edges[edge]['scheduled']:
+                    near_scheduled = True
+                    aug.next_pnt = edge[1]
+                    aug.edges.append((aug.active_pnt, aug.next_pnt))
+                    self.graph.nodes[aug.next_pnt]['touched'] = True
+                    break
+
+            if not near_scheduled:
+                candidates = list(self.graph.adj[aug.seed])
+                aug.next_pnt = int(np.random.choice(candidates))
+
+                aug.old_to_new = True
+
+            if aug.next_pnt not in receivers.keys():
+                receivers[aug.next_pnt] = {idx}
+
+            else:
+                receivers[aug.next_pnt].add(idx)
+
+        # First avoiding contentions
+        for r_pnt in receivers.keys():
+
+            if self.graph.nodes[r_pnt]['touched'] or len(receivers[r_pnt]) >= 2:
+                for idx in receivers[r_pnt]:
+                    augmentations[idx].alive = False
+            else:
+                idx = receivers[r_pnt].pop()  # aug = next(receivers[r_pnt])
+                aug = augmentations[idx]
+                if aug.old_to_new:
+                    aug.edges.append((aug.active_pnt, aug.next_pnt))
+                    aug.cur_size = aug.cur_size + 1
+                aug.old_to_new = not aug.old_to_new
+                self.graph.nodes[r_pnt]['touched'] = True
+
+        # The other steps
+        for tau in range(2, 2 * k + 2):
+            # For extension
+            receivers = dict()
+            for idx in range(cnt):
+                aug = augmentations[idx]
+                if aug.old_to_new and aug.cur_size == aug.max_size:
+                    aug.alive = False
+                if aug.alive:
+                    candidates = self.get_neighbors(aug.next_pnt, aug.active_pnt)
+
+                    if aug.old_to_new:
+                        picked_one = np.random.choice(candidates)
+                        while self.graph.edges[picked_one]['scheduled']:
+                            candidates.remove(picked_one)
+                            if len(candidates):
+                                picked_one = np.random.choice(candidates)
+                            else:
+                                picked_one = None
+                                break
+                                
+                    else:
+                        picked_one = None
+                        for edge in candidates:
+                            if self.graph.edges[edge]['scheduled']:
+                                picked_one = edge
+                                break
+
+                    if picked_one is None:
+                        aug.alive = False
+                    else:
+                        aug.active_pnt = aug.next_pnt
+                        aug.next_pnt = picked_one[1]
+                        if not aug.old_to_new:
+                            self.graph.nodes[aug.next_pnt]['touched'] = True
+                            aug.edges.append(picked_one)
+
+                        if aug.next_pnt not in receivers.keys():
+                            receivers[aug.next_pnt] = {idx}
+                        else:
+                            receivers[aug.next_pnt].add(idx)
+
+            # For avoiding contentions
+            for r_pnt in receivers.keys():
+
+                if self.graph.nodes[r_pnt]['touched'] or len(receivers[r_pnt]) >= 2:
+                    for idx in receivers[r_pnt]:
+                        augmentations[idx].alive = False
+                else:
+                    idx = (receivers[r_pnt]).pop()  
+                    aug = augmentations[idx]
+                    if aug.old_to_new:
+                        aug.edges.append((aug.active_pnt, aug.next_pnt))
+                        aug.cur_size = aug.cur_size + 1
+                    aug.old_to_new = not aug.old_to_new
+                    self.graph.nodes[r_pnt]['touched'] = True
+
+        # Check the possiblity of building cycle
+        for idx in augmentations.keys():
+            aug = augmentations[idx]
+            neighbors = set(self.graph.adj[aug.active_pnt])
+            if len(aug.edges) >= 2 and aug.seed in neighbors and aug.cur_size < aug.max_size:
+                first_edge = aug.edges[0]
+                last_edge = aug.edges[-1]
+                if self.graph.edges[first_edge]['scheduled'] and self.graph.edges[last_edge]['scheduled']:
+                    aug.edges.append((aug.active_pnt, aug.seed))
+                    aug.cur_size = aug.cur_size + 1
+        
+        # Get queue ratio
+        for idx in augmentations.keys():
+            aug = augmentations[idx]
+            tmp_max = -1
+            for act_pnt, next_pnt in aug.edges:
+                edge_max = max(self.graph.nodes[act_pnt]['local_max_backlog'],self.graph.nodes[next_pnt]['local_max_backlog'])
+                if tmp_max < edge_max:
+                    tmp_max = edge_max
+            aug.local_max_backlog = tmp_max
+                
+
+        # Calculate gain of all augmentations
+        for idx, aug in augmentations.items():
+            gain = 0
+            for edge in aug.edges:
+                self.get_estimator(edge,aug.local_max_backlog, estimator, time)
+                if self.graph.edges[edge]['scheduled']:
+                    gain -= self.graph.edges[edge][estimator]
+                else:
+                    gain += self.graph.edges[edge][estimator]
+
+            if gain > 0:
+                for edge in aug.edges:
+                    self.graph.edges[edge]['change'] = True
+        
+        # Update local_max_queue
+        for idx in augmentations.keys():
+            aug = augmentations[idx]
+            for act_pnt, next_pnt in aug.edges:
+                self.graph.nodes[act_pnt]['local_max_backlog'] = aug.local_max_backlog
+                self.graph.nodes[next_pnt]['local_max_backlog'] = aug.local_max_backlog
+        
+        # Switch matching according to schedule
+        past_matching = []
+        matching = []
+        for edge in self.graph.edges:
+            if self.graph.edges[edge]['scheduled']:
+                past_matching.append(edge)
+
+            if self.graph.edges[edge]['change']:
+                self.graph.edges[edge]['scheduled'] = not self.graph.edges[edge]['scheduled']
+            if self.graph.edges[edge]['scheduled']:
+                matching.append(edge)
+
+        if not matching_checker(matching):
+            print('No matching!')
+            print(augmentations)
+            self.draw(past_matching, matching)
+            raise Exception('Please revise UCB algorithm')
+
+        return matching    
+    
 
 def matching_checker(matching):
     tested = set()
